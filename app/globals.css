@@ -1,0 +1,11 @@
+/* Minimal enterprise, boring styles */
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #f5f6f7;
+  color: #111;
+}
+
+h1, h3, h4 { margin: 6px 0 }
+pre { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; font-size: 13px }
+button { cursor: pointer }
