@@ -25,6 +25,7 @@ type LlmAdvisorResult = {
   confidence?: number;
   cached?: boolean;
   latency_ms?: number;
+  raw_output_text?: string;
   error?: string;
 };
 
@@ -48,13 +49,93 @@ function coerceOptionId(raw: unknown): OptionId {
   return "C";
 }
 
-function extractOutputText(payload: any): string {
+function tryParseJson(text: string): any | null {
+  if (!text) return null;
+  const cleaned = text.replace(/```json/gi, "```").replace(/```/g, "").trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch (error) {
+    // fall through
+  }
+
+  const extracted = extractFirstJsonBlock(cleaned);
+  if (extracted) {
+    try {
+      return JSON.parse(extracted);
+    } catch (error) {
+      // fall through
+    }
+  }
+
+  for (const line of cleaned.split(/\n+/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      // continue
+    }
+  }
+  return null;
+}
+
+function extractFirstJsonBlock(text: string): string | null {
+  let inString = false;
+  let escaped = false;
+  let depth = 0;
+  let start = -1;
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    if (ch === "\\" && inString) {
+      escaped = !escaped;
+      continue;
+    }
+    if (ch === '"' && !escaped) {
+      inString = !inString;
+    }
+    escaped = false;
+    if (inString) continue;
+
+    if (ch === "{" || ch === "[") {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if (ch === "}" || ch === "]") {
+      depth -= 1;
+      if (depth === 0 && start !== -1) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
+function extractAdvisorPayload(payload: any): Partial<LlmAdvisorResult> | null {
+  if (!payload) return null;
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  for (const item of output) {
+    if (!Array.isArray(item?.content)) continue;
+    for (const content of item.content) {
+      if (content?.parsed && typeof content.parsed === "object") return content.parsed;
+      if (content?.type === "output_json" && content.json && typeof content.json === "object") return content.json;
+      if (content?.type === "output_text" && typeof content.text === "string") {
+        const parsed = tryParseJson(content.text);
+        if (parsed) return parsed;
+      }
+      if (content?.type === "refusal" && typeof content.refusal === "string") {
+        return { error: content.refusal };
+      }
+    }
+  }
+  return null;
+}
+
+function collectOutputText(payload: any): string {
   if (!payload) return "";
-  if (typeof payload.output_text === "string") return payload.output_text;
   const output = Array.isArray(payload.output) ? payload.output : [];
   const parts: string[] = [];
   for (const item of output) {
-    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+    if (!Array.isArray(item?.content)) continue;
     for (const content of item.content) {
       if (content?.type === "output_text" && typeof content.text === "string") {
         parts.push(content.text);
@@ -62,18 +143,6 @@ function extractOutputText(payload: any): string {
     }
   }
   return parts.join("\n").trim();
-}
-
-function parseAdvisorJson(text: string): Partial<LlmAdvisorResult> | null {
-  if (!text) return null;
-  let candidate = text.trim();
-  const match = candidate.match(/\{[\s\S]*\}$/);
-  if (match) candidate = match[0];
-  try {
-    return JSON.parse(candidate);
-  } catch (error) {
-    return null;
-  }
 }
 
 function getCache(key: string): LlmAdvisorResult | null {
@@ -106,12 +175,13 @@ async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: numb
   for (let i = 0; i < attempts; i += 1) {
     try {
       const res = await fetchWithTimeout(url, options, timeoutMs);
-      if (res.ok || i === attempts - 1 || res.status < 500) return res;
+      if (res.ok || i === attempts - 1 || (res.status < 500 && res.status !== 429)) return res;
       lastError = new Error(`OpenAI API error: ${res.status} ${res.statusText}`);
     } catch (error) {
       lastError = error;
       if (i === attempts - 1) throw error;
     }
+    await new Promise((resolve) => setTimeout(resolve, 200 * (i + 1)));
   }
   throw lastError;
 }
@@ -132,8 +202,8 @@ async function getLlmAdvisor(input: {
   }
 
   const systemPrompt =
-    "You are an operations advisor for logistics exceptions. Use only the provided data. Return JSON only. " +
-    "Schema: { recommended_option_id: \"A\"|\"B\"|\"C\", ranked_option_ids: [\"A\",\"B\",\"C\"], rationale: string, tradeoffs: string[], risk_flags: string[], confidence: number between 0 and 1 }.";
+    "You are an operations advisor for logistics exceptions. Use only the provided data. " +
+    "Return JSON only that matches the schema. No prose, no markdown.";
 
   const userPayload = {
     shipment: {
@@ -181,6 +251,42 @@ async function getLlmAdvisor(input: {
         },
         body: JSON.stringify({
           model,
+          temperature: 0.2,
+          max_output_tokens: 300,
+          text: {
+            format: {
+              type: "json_schema",
+              json_schema: {
+                name: "llm_advisor",
+                strict: true,
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: {
+                    recommended_option_id: { type: "string", enum: ["A", "B", "C"] },
+                    ranked_option_ids: {
+                      type: "array",
+                      items: { type: "string", enum: ["A", "B", "C"] },
+                      minItems: 1,
+                      maxItems: 3,
+                    },
+                    rationale: { type: "string" },
+                    tradeoffs: { type: "array", items: { type: "string" } },
+                    risk_flags: { type: "array", items: { type: "string" } },
+                    confidence: { type: "number", minimum: 0, maximum: 1 },
+                  },
+                  required: [
+                    "recommended_option_id",
+                    "ranked_option_ids",
+                    "rationale",
+                    "tradeoffs",
+                    "risk_flags",
+                    "confidence",
+                  ],
+                },
+              },
+            },
+          },
           input: [
             {
               type: "message",
@@ -213,10 +319,22 @@ async function getLlmAdvisor(input: {
     }
 
     const payload = await res.json();
-    const text = extractOutputText(payload);
-    const parsed = parseAdvisorJson(text);
+    const parsed = extractAdvisorPayload(payload);
     if (!parsed) {
-      return { status: "error", model, error: "Unable to parse LLM response." };
+      return {
+        status: "error",
+        model,
+        raw_output_text: collectOutputText(payload).slice(0, 1200),
+        error: "Unable to parse LLM response.",
+      };
+    }
+    if ((parsed as any).error && typeof (parsed as any).error === "string") {
+      return {
+        status: "error",
+        model,
+        raw_output_text: collectOutputText(payload).slice(0, 1200),
+        error: `Model refusal: ${(parsed as any).error}`,
+      };
     }
 
     const rankedRaw = Array.isArray((parsed as any).ranked_option_ids)

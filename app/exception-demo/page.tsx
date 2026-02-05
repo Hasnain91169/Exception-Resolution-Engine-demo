@@ -297,7 +297,15 @@ export default function ExceptionDemo() {
                 </p>
               </div>
             ) : (
-              <p className="empty-state">{llmAdvisor?.error || 'LLM advisor unavailable.'}</p>
+              <div className="stat-stack">
+                <p className="empty-state">{llmAdvisor?.error || 'LLM advisor unavailable.'}</p>
+                {llmAdvisor?.raw_output_text ? (
+                  <details>
+                    <summary style={{ cursor: 'pointer' }}>Raw LLM output</summary>
+                    <pre className="audit-block">{llmAdvisor.raw_output_text}</pre>
+                  </details>
+                ) : null}
+              </div>
             )
           ) : (
             <p className="empty-state">Run resolution to fetch LLM guidance.</p>
