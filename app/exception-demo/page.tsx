@@ -37,6 +37,13 @@ export default function ExceptionDemo() {
 
   const currentShipment = useMemo(() => shipments.find((s) => s.shipment_id === shipmentId) ?? shipments[0], [shipmentId])
   const recommendedId = result?.exception?.recommendation?.recommended_option_id
+  const llmAdvisor = result?.llm_advisor
+  const alignmentStatus =
+    llmAdvisor?.status === 'ok' && recommendedId && llmAdvisor.recommended_option_id
+      ? recommendedId === llmAdvisor.recommended_option_id
+        ? 'aligned'
+        : 'diverged'
+      : 'unavailable'
   const errorMessage = result?.error as string | undefined
   const hasResult = Boolean(result?.exception)
 
@@ -135,7 +142,9 @@ export default function ExceptionDemo() {
               <div>
                 <span className="stat-label">Evidence</span>
                 <ul>
-                  {result.exception.trigger?.threshold ? <li>{result.exception.trigger.threshold}</li> : null}
+                  {Array.isArray(result.exception.trigger?.threshold_fired)
+                    ? result.exception.trigger.threshold_fired.map((t: string) => <li key={t}>{t}</li>)
+                    : null}
                   {(result.reasoning_log?.trigger_logs || []).map((l: string, i: number) => (
                     <li key={i}>{l}</li>
                   ))}
@@ -229,6 +238,107 @@ export default function ExceptionDemo() {
             </div>
           ) : (
             <p className="empty-state">Run resolution to generate comms and audit data.</p>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>LLM advisor</h3>
+            <span className="pill">OpenAI</span>
+          </div>
+          {errorMessage ? (
+            <p className="empty-state">Error: {errorMessage}</p>
+          ) : hasResult ? (
+            llmAdvisor?.status === 'ok' ? (
+              <div className="stat-stack">
+                <div className="stat">
+                  <span className="stat-label">Recommended option</span>
+                  <span className="stat-value">{llmAdvisor.recommended_option_id}</span>
+                </div>
+                <div className="stat">
+                  <span className="stat-label">Ranked options</span>
+                  <span className="stat-value">{(llmAdvisor.ranked_option_ids || []).join(' > ')}</span>
+                </div>
+                {llmAdvisor.rationale ? (
+                  <div>
+                    <span className="stat-label">Rationale</span>
+                    <p>{llmAdvisor.rationale}</p>
+                  </div>
+                ) : null}
+                {Array.isArray(llmAdvisor.tradeoffs) && llmAdvisor.tradeoffs.length ? (
+                  <div>
+                    <span className="stat-label">Tradeoffs</span>
+                    <ul>
+                      {llmAdvisor.tradeoffs.map((t: string, i: number) => (
+                        <li key={i}>{t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {Array.isArray(llmAdvisor.risk_flags) && llmAdvisor.risk_flags.length ? (
+                  <div>
+                    <span className="stat-label">Risk flags</span>
+                    <ul>
+                      {llmAdvisor.risk_flags.map((t: string, i: number) => (
+                        <li key={i}>{t}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+                {typeof llmAdvisor.confidence === 'number' ? (
+                  <div className="stat">
+                    <span className="stat-label">Confidence</span>
+                    <span className="stat-value">{Math.round(llmAdvisor.confidence * 100)}%</span>
+                  </div>
+                ) : null}
+                <p className="muted" style={{ fontSize: 12 }}>
+                  Advisory only. Final decision remains rule-based. {llmAdvisor.model ? `Model: ${llmAdvisor.model}.` : ''}{' '}
+                  {llmAdvisor.latency_ms ? `Latency: ${llmAdvisor.latency_ms}ms.` : ''} {llmAdvisor.cached ? 'Cached.' : ''}
+                </p>
+              </div>
+            ) : (
+              <p className="empty-state">{llmAdvisor?.error || 'LLM advisor unavailable.'}</p>
+            )
+          ) : (
+            <p className="empty-state">Run resolution to fetch LLM guidance.</p>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Advisor vs rule</h3>
+            <span
+              className={`status-chip ${
+                alignmentStatus === 'aligned' ? 'good' : alignmentStatus === 'diverged' ? 'warn' : 'neutral'
+              }`}
+            >
+              {alignmentStatus === 'aligned' ? 'Aligned' : alignmentStatus === 'diverged' ? 'Conflict' : 'Unavailable'}
+            </span>
+          </div>
+          {errorMessage ? (
+            <p className="empty-state">Error: {errorMessage}</p>
+          ) : hasResult ? (
+            <div className="compare-list">
+              <div className="compare-row">
+                <span className="stat-label">Rule recommendation</span>
+                <strong>{recommendedId ?? '—'}</strong>
+              </div>
+              <div className="compare-row">
+                <span className="stat-label">LLM recommendation</span>
+                <strong>{llmAdvisor?.recommended_option_id ?? '—'}</strong>
+              </div>
+              <div className="compare-row">
+                <span className="stat-label">LLM confidence</span>
+                <strong>{typeof llmAdvisor?.confidence === 'number' ? `${Math.round(llmAdvisor.confidence * 100)}%` : '—'}</strong>
+              </div>
+              {alignmentStatus === 'diverged' ? (
+                <p className="muted" style={{ fontSize: 12 }}>
+                  Review tradeoffs before overriding policy.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="empty-state">Run resolution to compare recommendations.</p>
           )}
         </div>
       </section>

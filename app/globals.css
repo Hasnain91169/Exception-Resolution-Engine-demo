@@ -410,6 +410,44 @@ ul {
   font-weight: 600;
 }
 
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.status-chip.good {
+  background: rgba(26, 127, 107, 0.16);
+  color: var(--accent-strong);
+}
+
+.status-chip.warn {
+  background: rgba(196, 107, 46, 0.18);
+  color: #9a4e1f;
+}
+
+.status-chip.neutral {
+  background: rgba(23, 59, 74, 0.12);
+  color: var(--accent-3);
+}
+
+.compare-list {
+  display: grid;
+  gap: 10px;
+}
+
+.compare-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
 .pre-block {
   background: #f4efe8;
   border-radius: 10px;

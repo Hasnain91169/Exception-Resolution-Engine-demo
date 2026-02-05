@@ -12,6 +12,30 @@ import { createAuditEvent } from "@/lib/exception/audit";
 
 // local helper to coerce option_id into the strict union type expected by Option[]
 type OptionId = "A" | "B" | "C";
+type LlmAdvisorStatus = "ok" | "skipped" | "error";
+
+type LlmAdvisorResult = {
+  status: LlmAdvisorStatus;
+  model?: string;
+  recommended_option_id?: OptionId;
+  ranked_option_ids?: OptionId[];
+  rationale?: string;
+  tradeoffs?: string[];
+  risk_flags?: string[];
+  confidence?: number;
+  cached?: boolean;
+  latency_ms?: number;
+  error?: string;
+};
+
+type CacheEntry = {
+  value: LlmAdvisorResult;
+  expiresAt: number;
+};
+
+const llmCache = new Map<string, CacheEntry>();
+const parsedCacheTtl = Number(process.env.LLM_CACHE_TTL_MS);
+const LLM_CACHE_TTL_MS = Number.isFinite(parsedCacheTtl) ? parsedCacheTtl : 120000;
 
 function coerceOptionId(raw: unknown): OptionId {
   // Accept existing A/B/C
@@ -22,6 +46,212 @@ function coerceOptionId(raw: unknown): OptionId {
   if (s.includes("A")) return "A";
   if (s.includes("B")) return "B";
   return "C";
+}
+
+function extractOutputText(payload: any): string {
+  if (!payload) return "";
+  if (typeof payload.output_text === "string") return payload.output_text;
+  const output = Array.isArray(payload.output) ? payload.output : [];
+  const parts: string[] = [];
+  for (const item of output) {
+    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const content of item.content) {
+      if (content?.type === "output_text" && typeof content.text === "string") {
+        parts.push(content.text);
+      }
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function parseAdvisorJson(text: string): Partial<LlmAdvisorResult> | null {
+  if (!text) return null;
+  let candidate = text.trim();
+  const match = candidate.match(/\{[\s\S]*\}$/);
+  if (match) candidate = match[0];
+  try {
+    return JSON.parse(candidate);
+  } catch (error) {
+    return null;
+  }
+}
+
+function getCache(key: string): LlmAdvisorResult | null {
+  const entry = llmCache.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    llmCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function setCache(key: string, value: LlmAdvisorResult) {
+  if (value.status !== "ok") return;
+  llmCache.set(key, { value, expiresAt: Date.now() + LLM_CACHE_TTL_MS });
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(id);
+  }
+}
+
+async function fetchWithRetry(url: string, options: RequestInit, timeoutMs: number, attempts = 2) {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      const res = await fetchWithTimeout(url, options, timeoutMs);
+      if (res.ok || i === attempts - 1 || res.status < 500) return res;
+      lastError = new Error(`OpenAI API error: ${res.status} ${res.statusText}`);
+    } catch (error) {
+      lastError = error;
+      if (i === attempts - 1) throw error;
+    }
+  }
+  throw lastError;
+}
+
+async function getLlmAdvisor(input: {
+  shipment: any;
+  trigger: any;
+  severity: any;
+  options: any[];
+  recommendation: any;
+}): Promise<LlmAdvisorResult> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const parsedTimeout = Number(process.env.OPENAI_TIMEOUT_MS);
+  const timeoutMs = Number.isFinite(parsedTimeout) ? parsedTimeout : 6000;
+  if (!apiKey) {
+    return { status: "skipped", error: "Missing OPENAI_API_KEY." };
+  }
+
+  const systemPrompt =
+    "You are an operations advisor for logistics exceptions. Use only the provided data. Return JSON only. " +
+    "Schema: { recommended_option_id: \"A\"|\"B\"|\"C\", ranked_option_ids: [\"A\",\"B\",\"C\"], rationale: string, tradeoffs: string[], risk_flags: string[], confidence: number between 0 and 1 }.";
+
+  const userPayload = {
+    shipment: {
+      shipment_id: input.shipment.shipment_id,
+      origin: input.shipment.origin,
+      destination: input.shipment.destination,
+      goods_type: input.shipment.goods_type,
+      goods_value_eur: input.shipment.goods_value_eur,
+      customer_priority: input.shipment.customer_priority,
+      sla_target_pct: input.shipment.sla_target_pct,
+      planned_arrival: input.shipment.planned_arrival,
+      predicted_eta: input.shipment.predicted_eta,
+      delay_hours: input.shipment.delay_hours,
+      current_location: input.shipment.current_location,
+      event_feed: input.shipment.event_feed,
+    },
+    trigger: input.trigger,
+    severity: input.severity,
+    options: input.options,
+    rule_recommendation: input.recommendation,
+  };
+
+  const cacheKey = JSON.stringify({
+    shipment_id: input.shipment.shipment_id,
+    trigger: input.trigger,
+    severity: input.severity,
+    options: input.options,
+    rule_recommendation: input.recommendation,
+  });
+  const cached = getCache(cacheKey);
+  if (cached) {
+    return { ...cached, cached: true };
+  }
+
+  try {
+    const startedAt = Date.now();
+    const res = await fetchWithRetry(
+      "https://api.openai.com/v1/responses",
+      {
+        method: "POST",
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          input: [
+            {
+              type: "message",
+              role: "system",
+              content: [{ type: "input_text", text: systemPrompt }],
+            },
+            {
+              type: "message",
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: `Evaluate and rank resolution options. Data:\n${JSON.stringify(userPayload, null, 2)}`,
+                },
+              ],
+            },
+          ],
+        }),
+      },
+      timeoutMs
+    );
+
+    if (!res.ok) {
+      return {
+        status: "error",
+        model,
+        latency_ms: Date.now() - startedAt,
+        error: `OpenAI API error: ${res.status} ${res.statusText}`,
+      };
+    }
+
+    const payload = await res.json();
+    const text = extractOutputText(payload);
+    const parsed = parseAdvisorJson(text);
+    if (!parsed) {
+      return { status: "error", model, error: "Unable to parse LLM response." };
+    }
+
+    const rankedRaw = Array.isArray((parsed as any).ranked_option_ids)
+      ? (parsed as any).ranked_option_ids
+      : [];
+    const ranked = rankedRaw.map(coerceOptionId);
+    const fallbackRecommended = coerceOptionId(input.recommendation.recommended_option_id);
+    const recommended = (parsed as any).recommended_option_id
+      ? coerceOptionId((parsed as any).recommended_option_id)
+      : ranked[0] || fallbackRecommended;
+    const rankedFallback = [recommended, fallbackRecommended, "A", "B", "C"].filter(
+      (value, index, self) => self.indexOf(value as OptionId) === index
+    ) as OptionId[];
+
+    const result: LlmAdvisorResult = {
+      status: "ok",
+      model,
+      recommended_option_id: recommended,
+      ranked_option_ids: ranked.length ? ranked : rankedFallback,
+      rationale: typeof (parsed as any).rationale === "string" ? (parsed as any).rationale : undefined,
+      tradeoffs: Array.isArray((parsed as any).tradeoffs) ? (parsed as any).tradeoffs : undefined,
+      risk_flags: Array.isArray((parsed as any).risk_flags) ? (parsed as any).risk_flags : undefined,
+      confidence: typeof (parsed as any).confidence === "number" ? (parsed as any).confidence : undefined,
+      latency_ms: Date.now() - startedAt,
+    };
+
+    setCache(cacheKey, result);
+    return result;
+  } catch (error) {
+    return {
+      status: "error",
+      model,
+      error: `OpenAI request failed: ${String(error)}`,
+    };
+  }
 }
 
 export async function POST(req: Request) {
@@ -53,6 +283,14 @@ export async function POST(req: Request) {
     cause: trigger.cause,
     delay_hours: trigger.delay_hours,
     options,
+  });
+
+  const llm_advisor = await getLlmAdvisor({
+    shipment,
+    trigger,
+    severity,
+    options,
+    recommendation,
   });
 
   // Allow override selected option
@@ -138,6 +376,7 @@ export async function POST(req: Request) {
       },
     },
     audit_event,
+    llm_advisor,
     reasoning_log: {
       trigger_logs: trigger.logs,
       severity_logs: severity.logs,
