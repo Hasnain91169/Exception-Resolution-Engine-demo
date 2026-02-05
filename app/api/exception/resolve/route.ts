@@ -112,37 +112,14 @@ function extractFirstJsonBlock(text: string): string | null {
 
 function extractAdvisorPayload(payload: any): Partial<LlmAdvisorResult> | null {
   if (!payload) return null;
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  for (const item of output) {
-    if (!Array.isArray(item?.content)) continue;
-    for (const content of item.content) {
-      if (content?.parsed && typeof content.parsed === "object") return content.parsed;
-      if (content?.type === "output_json" && content.json && typeof content.json === "object") return content.json;
-      if (content?.type === "output_text" && typeof content.text === "string") {
-        const parsed = tryParseJson(content.text);
-        if (parsed) return parsed;
-      }
-      if (content?.type === "refusal" && typeof content.refusal === "string") {
-        return { error: content.refusal };
-      }
-    }
+  const message = payload?.choices?.[0]?.message;
+  if (message?.refusal) {
+    return { error: message.refusal };
+  }
+  if (typeof message?.content === "string") {
+    return tryParseJson(message.content);
   }
   return null;
-}
-
-function collectOutputText(payload: any): string {
-  if (!payload) return "";
-  const output = Array.isArray(payload.output) ? payload.output : [];
-  const parts: string[] = [];
-  for (const item of output) {
-    if (!Array.isArray(item?.content)) continue;
-    for (const content of item.content) {
-      if (content?.type === "output_text" && typeof content.text === "string") {
-        parts.push(content.text);
-      }
-    }
-  }
-  return parts.join("\n").trim();
 }
 
 function getCache(key: string): LlmAdvisorResult | null {
@@ -194,7 +171,7 @@ async function getLlmAdvisor(input: {
   recommendation: any;
 }): Promise<LlmAdvisorResult> {
   const apiKey = process.env.OPENAI_API_KEY;
-  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const model = process.env.OPENAI_MODEL || "gpt-4o-mini";
   const parsedTimeout = Number(process.env.OPENAI_TIMEOUT_MS);
   const timeoutMs = Number.isFinite(parsedTimeout) ? parsedTimeout : 6000;
   if (!apiKey) {
@@ -241,7 +218,7 @@ async function getLlmAdvisor(input: {
   try {
     const startedAt = Date.now();
     const res = await fetchWithRetry(
-      "https://api.openai.com/v1/responses",
+      "https://api.openai.com/v1/chat/completions",
       {
         method: "POST",
         cache: "no-store",
@@ -252,56 +229,44 @@ async function getLlmAdvisor(input: {
         body: JSON.stringify({
           model,
           temperature: 0.2,
-          max_output_tokens: 300,
-          text: {
-            format: {
-              type: "json_schema",
-              json_schema: {
-                name: "llm_advisor",
-                strict: true,
-                schema: {
-                  type: "object",
-                  additionalProperties: false,
-                  properties: {
-                    recommended_option_id: { type: "string", enum: ["A", "B", "C"] },
-                    ranked_option_ids: {
-                      type: "array",
-                      items: { type: "string", enum: ["A", "B", "C"] },
-                      minItems: 1,
-                      maxItems: 3,
-                    },
-                    rationale: { type: "string" },
-                    tradeoffs: { type: "array", items: { type: "string" } },
-                    risk_flags: { type: "array", items: { type: "string" } },
-                    confidence: { type: "number", minimum: 0, maximum: 1 },
+          max_tokens: 300,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: "llm_advisor",
+              strict: true,
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  recommended_option_id: { type: "string", enum: ["A", "B", "C"] },
+                  ranked_option_ids: {
+                    type: "array",
+                    items: { type: "string", enum: ["A", "B", "C"] },
+                    minItems: 1,
+                    maxItems: 3,
                   },
-                  required: [
-                    "recommended_option_id",
-                    "ranked_option_ids",
-                    "rationale",
-                    "tradeoffs",
-                    "risk_flags",
-                    "confidence",
-                  ],
+                  rationale: { type: "string" },
+                  tradeoffs: { type: "array", items: { type: "string" } },
+                  risk_flags: { type: "array", items: { type: "string" } },
+                  confidence: { type: "number", minimum: 0, maximum: 1 },
                 },
+                required: [
+                  "recommended_option_id",
+                  "ranked_option_ids",
+                  "rationale",
+                  "tradeoffs",
+                  "risk_flags",
+                  "confidence",
+                ],
               },
             },
           },
-          input: [
+          messages: [
+            { role: "system", content: systemPrompt },
             {
-              type: "message",
-              role: "system",
-              content: [{ type: "input_text", text: systemPrompt }],
-            },
-            {
-              type: "message",
               role: "user",
-              content: [
-                {
-                  type: "input_text",
-                  text: `Evaluate and rank resolution options. Data:\n${JSON.stringify(userPayload, null, 2)}`,
-                },
-              ],
+              content: `Evaluate and rank resolution options. Data:\n${JSON.stringify(userPayload, null, 2)}`,
             },
           ],
         }),
@@ -310,11 +275,14 @@ async function getLlmAdvisor(input: {
     );
 
     if (!res.ok) {
+      const errorPayload = await res.json().catch(() => null);
+      const errorMessage =
+        errorPayload?.error?.message || errorPayload?.message || `OpenAI API error: ${res.status} ${res.statusText}`;
       return {
         status: "error",
         model,
         latency_ms: Date.now() - startedAt,
-        error: `OpenAI API error: ${res.status} ${res.statusText}`,
+        error: errorMessage,
       };
     }
 
@@ -324,7 +292,7 @@ async function getLlmAdvisor(input: {
       return {
         status: "error",
         model,
-        raw_output_text: collectOutputText(payload).slice(0, 1200),
+        raw_output_text: payload?.choices?.[0]?.message?.content?.slice?.(0, 1200),
         error: "Unable to parse LLM response.",
       };
     }
@@ -332,7 +300,7 @@ async function getLlmAdvisor(input: {
       return {
         status: "error",
         model,
-        raw_output_text: collectOutputText(payload).slice(0, 1200),
+        raw_output_text: payload?.choices?.[0]?.message?.content?.slice?.(0, 1200),
         error: `Model refusal: ${(parsed as any).error}`,
       };
     }
