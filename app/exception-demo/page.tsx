@@ -1,9 +1,8 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { shipments } from '@/data/shipments'
 
 type Mode = 'simulate' | 'execute'
-
 type ApiResponse = any
 
 export default function ExceptionDemo() {
@@ -14,7 +13,6 @@ export default function ExceptionDemo() {
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
-    // run once with defaults to be ready on first load
     runResolution()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -23,7 +21,11 @@ export default function ExceptionDemo() {
     setLoading(true)
     setResult(null)
     try {
-      const res = await fetch('/api/exception/resolve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ shipment_id: shipmentId, mode, selected_option_id: selectedOption }) })
+      const res = await fetch('/api/exception/resolve', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shipment_id: shipmentId, mode, selected_option_id: selectedOption }),
+      })
       const json = await res.json()
       setResult(json)
     } catch (e) {
@@ -33,147 +35,200 @@ export default function ExceptionDemo() {
     }
   }
 
-  const currentShipment = shipments.find((s) => s.shipment_id === shipmentId)!
+  const currentShipment = useMemo(() => shipments.find((s) => s.shipment_id === shipmentId) ?? shipments[0], [shipmentId])
+  const recommendedId = result?.exception?.recommendation?.recommended_option_id
+  const errorMessage = result?.error as string | undefined
+  const hasResult = Boolean(result?.exception)
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16, maxWidth: 1100 }}>
-      <section style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-        <label>
-          Shipment:{' '}
-          <select value={shipmentId} onChange={(e) => setShipmentId(e.target.value)}>
-            {shipments.map((s) => (
-              <option key={s.shipment_id} value={s.shipment_id}>
-                {s.shipment_id}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Mode:{' '}
-          <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-            <option value="simulate">Simulate</option>
-            <option value="execute">Execute</option>
-          </select>
-        </label>
-
-        <label>
-          Apply Option:{' '}
-          <select value={selectedOption ?? ''} onChange={(e) => setSelectedOption((e.target.value as any) || undefined)}>
-            <option value="">(auto)</option>
-            <option value="A">A</option>
-            <option value="B">B</option>
-            <option value="C">C</option>
-          </select>
-        </label>
-
-        <button onClick={runResolution} disabled={loading} style={{ padding: '6px 12px' }}>
-          {loading ? 'Running...' : 'Run Resolution'}
-        </button>
+    <div className="fade-in" id="workflow">
+      <section className="page-hero">
+        <div>
+          <p className="eyebrow">Exception resolution</p>
+          <h1>Control workflow for shipment exceptions</h1>
+          <p>
+            Use simulation to preview actions or execute a deterministic response. Every outcome is backed by a
+            reasoning log and audit event.
+          </p>
+        </div>
+        <div className="card">
+          <div className="stat-stack">
+            <div className="stat">
+              <span className="stat-label">Active shipment</span>
+              <span className="stat-value">{currentShipment.shipment_id}</span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">Current location</span>
+              <span className="stat-value">{currentShipment.current_location.terminal_name}</span>
+            </div>
+          <div className="stat">
+            <span className="stat-label">Status</span>
+            <span className="stat-value">{currentShipment.customer_priority} priority</span>
+          </div>
+          </div>
+        </div>
       </section>
 
-      <section style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
-        <div style={{ background: '#fff', padding: 12, borderRadius: 6 }}>
-          <h3>Trigger + Severity</h3>
-          <div style={{ fontFamily: 'monospace', fontSize: 13 }}>
-            <div>Shipment: {shipmentId}</div>
-            <div>Location: {currentShipment.current_location.terminal_name}</div>
-            <hr />
-            {result ? (
-              <>
-                <div>Delay: {result.exception.trigger.delay_hours}h</div>
-                <div>Percent delay: {(result.exception.trigger.percent_delay * 100).toFixed(1)}%</div>
-                <div>Cause: {result.exception.trigger.cause}</div>
-                <div>
-                  Severity: <strong>{result.exception.severity.level.toUpperCase()}</strong> ({result.exception.severity.score})
-                </div>
-                <div>
-                  Evidence:
-                  <ul>
-                    {result.exception.trigger && result.exception.trigger.threshold && <li>{result.exception.trigger.threshold}</li>}
-                    {(result.reasoning_log?.trigger_logs || []).map((l: string, i: number) => (
-                      <li key={i}>{l}</li>
-                    ))}
-                  </ul>
-                </div>
-              </>
-            ) : (
-              <div style={{ color: '#666' }}>Run resolution to view details</div>
-            )}
-          </div>
+      <section className="card controls-card">
+        <div className="control-grid">
+          <label className="field">
+            Shipment
+            <select value={shipmentId} onChange={(e) => setShipmentId(e.target.value)}>
+              {shipments.map((s) => (
+                <option key={s.shipment_id} value={s.shipment_id}>
+                  {s.shipment_id}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="field">
+            Mode
+            <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
+              <option value="simulate">Simulate</option>
+              <option value="execute">Execute</option>
+            </select>
+          </label>
+          <label className="field">
+            Apply option
+            <select value={selectedOption ?? ''} onChange={(e) => setSelectedOption((e.target.value as any) || undefined)}>
+              <option value="">Auto</option>
+              <option value="A">A</option>
+              <option value="B">B</option>
+              <option value="C">C</option>
+            </select>
+          </label>
         </div>
+        <div className="control-actions">
+          <button className="btn primary" onClick={runResolution} disabled={loading} aria-busy={loading}>
+            {loading ? 'Running resolution' : 'Run resolution'}
+          </button>
+          <span className="muted">Mode determines whether actions are executed or simulated.</span>
+        </div>
+      </section>
 
-        <div style={{ background: '#fff', padding: 12, borderRadius: 6 }}>
-          <h3>Resolution Options</h3>
-          <div style={{ fontFamily: 'monospace', fontSize: 13 }}>
-            {result ? (
-              <div>
-                {result.exception.options.map((o: any) => (
-                  <div key={o.option_id} style={{ borderBottom: '1px solid #eee', padding: '8px 0' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <div>
-                        <strong>{o.option_id}</strong> — {o.title}
-                        {result.exception.recommendation.recommended_option_id === o.option_id && (
-                          <span style={{ marginLeft: 8, background: '#e6f3ff', color: '#023e8a', padding: '2px 6px', borderRadius: 4 }}>RECOMMENDED</span>
-                        )}
-                      </div>
-                      <div style={{ textAlign: 'right' }}>
-                        <div>+{o.delta_hours}h</div>
-                        <div>€{o.cost_eur}</div>
-                        <div>{o.risk.toUpperCase()}</div>
-                      </div>
-                    </div>
-                    <details style={{ marginTop: 6 }}>
-                      <summary style={{ cursor: 'pointer' }}>Steps</summary>
-                      <ul>
-                        {o.steps.map((s: string, i: number) => (
-                          <li key={i}>{s}</li>
-                        ))}
-                      </ul>
-                    </details>
-                  </div>
-                ))}
+      <section className="grid-3">
+        <div className="card">
+          <div className="card-header">
+            <h3>Trigger and severity</h3>
+            {result?.exception?.severity?.level ? <span className="tag">{result.exception.severity.level}</span> : null}
+          </div>
+          {errorMessage ? (
+            <p className="empty-state">Error: {errorMessage}</p>
+          ) : hasResult ? (
+            <div className="stat-stack">
+              <div className="stat">
+                <span className="stat-label">Delay</span>
+                <span className="stat-value">{result.exception.trigger.delay_hours} hours</span>
               </div>
-            ) : (
-              <div style={{ color: '#666' }}>Run resolution to see options</div>
-            )}
-          </div>
+              <div className="stat">
+                <span className="stat-label">Percent delay</span>
+                <span className="stat-value">{(result.exception.trigger.percent_delay * 100).toFixed(1)}%</span>
+              </div>
+              <div className="stat">
+                <span className="stat-label">Cause</span>
+                <span className="stat-value">{result.exception.trigger.cause}</span>
+              </div>
+              <div className="stat">
+                <span className="stat-label">Severity score</span>
+                <span className="stat-value">{result.exception.severity.score}</span>
+              </div>
+              <div>
+                <span className="stat-label">Evidence</span>
+                <ul>
+                  {result.exception.trigger?.threshold ? <li>{result.exception.trigger.threshold}</li> : null}
+                  {(result.reasoning_log?.trigger_logs || []).map((l: string, i: number) => (
+                    <li key={i}>{l}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : (
+            <p className="empty-state">Run resolution to view trigger details.</p>
+          )}
         </div>
 
-        <div style={{ background: '#fff', padding: 12, borderRadius: 6 }}>
-          <h3>Communications + Audit</h3>
-          {result ? (
-            <div style={{ fontFamily: 'monospace', fontSize: 13 }}>
+        <div className="card">
+          <div className="card-header">
+            <h3>Resolution options</h3>
+            <span className="pill">Ranked</span>
+          </div>
+          {errorMessage ? (
+            <p className="empty-state">Error: {errorMessage}</p>
+          ) : hasResult ? (
+            <div>
+              {result.exception.options.map((o: any) => (
+                <div key={o.option_id} className={`option-card ${recommendedId === o.option_id ? 'recommended' : ''}`}>
+                  <div className="option-header">
+                    <div className="option-title">
+                      <strong>
+                        {o.option_id} - {o.title}
+                      </strong>
+                      {recommendedId === o.option_id ? <span className="badge">Recommended</span> : null}
+                    </div>
+                    <div className="option-meta">
+                      <div>+{o.delta_hours} hours</div>
+                      <div>EUR {o.cost_eur}</div>
+                      <div>{o.risk.toUpperCase()}</div>
+                    </div>
+                  </div>
+                  <details style={{ marginTop: 8 }}>
+                    <summary style={{ cursor: 'pointer' }}>Steps</summary>
+                    <ul>
+                      {o.steps.map((s: string, i: number) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ul>
+                  </details>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="empty-state">Run resolution to see options.</p>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header">
+            <h3>Comms and audit</h3>
+            <span className="pill accent">Ready to send</span>
+          </div>
+          {errorMessage ? (
+            <p className="empty-state">Error: {errorMessage}</p>
+          ) : hasResult ? (
+            <div className="stat-stack">
               <section>
-                <h4>Customer Message</h4>
-                <pre style={{ background: '#f2f3f4', padding: 8 }}>{result.exception.comms.customer_message.text}</pre>
-                <div>New ETA: {result.exception.comms.customer_message.new_eta}</div>
+                <h4>Customer message</h4>
+                <div className="pre-block">{result.exception.comms.customer_message.text}</div>
+                <div className="muted" style={{ marginTop: 8 }}>
+                  New ETA: {result.exception.comms.customer_message.new_eta}
+                </div>
                 <button
+                  className="btn secondary"
                   onClick={() => navigator.clipboard.writeText(result.exception.comms.customer_message.text)}
-                  style={{ marginTop: 6, padding: '6px 10px' }}
+                  style={{ marginTop: 8 }}
                 >
-                  Copy
+                  Copy message
                 </button>
               </section>
 
-              <section style={{ marginTop: 10 }}>
-                <h4>Internal Summary</h4>
-                <pre style={{ background: '#f2f3f4', padding: 8 }}>{result.exception.comms.internal_summary}</pre>
-                <button onClick={() => navigator.clipboard.writeText(result.exception.comms.internal_summary)} style={{ marginTop: 6, padding: '6px 10px' }}>
-                  Copy
+              <section>
+                <h4>Internal summary</h4>
+                <div className="pre-block">{result.exception.comms.internal_summary}</div>
+                <button className="btn secondary" onClick={() => navigator.clipboard.writeText(result.exception.comms.internal_summary)} style={{ marginTop: 8 }}>
+                  Copy summary
                 </button>
               </section>
 
-              <section style={{ marginTop: 10 }}>
-                <h4>Audit Trail</h4>
+              <section>
+                <h4>Audit trail</h4>
                 <details>
                   <summary style={{ cursor: 'pointer' }}>View JSON</summary>
-                  <pre style={{ background: '#111', color: '#dff', padding: 12, overflow: 'auto' }}>{JSON.stringify(result.audit_event, null, 2)}</pre>
+                  <pre className="audit-block">{JSON.stringify(result.audit_event, null, 2)}</pre>
                 </details>
               </section>
             </div>
           ) : (
-            <div style={{ color: '#666' }}>Run to generate comms and audit</div>
+            <p className="empty-state">Run resolution to generate comms and audit data.</p>
           )}
         </div>
       </section>

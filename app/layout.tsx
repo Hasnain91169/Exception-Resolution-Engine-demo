@@ -9,11 +9,22 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <body>
-        <div style={{ fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial', padding: 20, background: '#f5f6f7', minHeight: '100vh' }}>
-          <header style={{ marginBottom: 20 }}>
-            <h1 style={{ margin: 0, fontSize: 20 }}>Exception Handling AI — Demo 3</h1>
+        <div className="app-shell">
+          <header className="topbar fade-in">
+            <div className="brand">
+              <div className="brand-mark">EH</div>
+              <div>
+                <div className="brand-title">Exception Handling AI</div>
+                <div className="brand-subtitle">Demo 3 - Internal control workflow</div>
+              </div>
+            </div>
+            <div className="topbar-actions">
+              <div className="pill">Deterministic</div>
+              <div className="pill accent">No external services</div>
+            </div>
           </header>
-          <main>{children}</main>
+          <main className="main-content">{children}</main>
+          <footer className="footer">Rule-based resolution engine for logistics operations.</footer>
         </div>
       </body>
     </html>
