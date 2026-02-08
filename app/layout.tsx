@@ -22,10 +22,6 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <nav className="topbar-actions">
               <Link href="/">Home</Link>
               <Link href="/exception-demo">Demos</Link>
-              <Link href="/exception-demo#workflow">Case Studies</Link>
-              <a href="https://vercel.com" target="_blank" rel="noreferrer">
-                Resources
-              </a>
             </nav>
             <Link href="/exception-demo" className="topbar-cta">
               Get Started
