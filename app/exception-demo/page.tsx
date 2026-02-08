@@ -329,15 +329,15 @@ export default function ExceptionDemo() {
             <div className="compare-list">
               <div className="compare-row">
                 <span className="stat-label">Rule recommendation</span>
-                <strong>{recommendedId ?? '—'}</strong>
+                <strong>{recommendedId ?? '-'}</strong>
               </div>
               <div className="compare-row">
                 <span className="stat-label">LLM recommendation</span>
-                <strong>{llmAdvisor?.recommended_option_id ?? '—'}</strong>
+                <strong>{llmAdvisor?.recommended_option_id ?? '-'}</strong>
               </div>
               <div className="compare-row">
                 <span className="stat-label">LLM confidence</span>
-                <strong>{typeof llmAdvisor?.confidence === 'number' ? `${Math.round(llmAdvisor.confidence * 100)}%` : '—'}</strong>
+                <strong>{typeof llmAdvisor?.confidence === 'number' ? `${Math.round(llmAdvisor.confidence * 100)}%` : '-'}</strong>
               </div>
               {alignmentStatus === 'diverged' ? (
                 <p className="muted" style={{ fontSize: 12 }}>

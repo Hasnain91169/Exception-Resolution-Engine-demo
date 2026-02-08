@@ -6,7 +6,7 @@ export default function Home() {
       <section className="hero">
         <div>
           <p className="eyebrow">Exception Handling AI</p>
-          <h1 className="hero-title">Operational control center for shipment exceptions</h1>
+          <h1 className="hero-title">Automate your logistics coordination</h1>
           <p>
             Demo 3 shows a deterministic, auditable workflow for logistics operations. Simulate or execute resolution
             actions without external dependencies.
