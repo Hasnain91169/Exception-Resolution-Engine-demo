@@ -23,7 +23,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               <Link href="/">Home</Link>
               <Link href="/exception-demo">Demos</Link>
             </nav>
-            <Link href="/exception-demo" className="topbar-cta">
+            <Link href="https://www.javedai.com/book" className="topbar-cta">
               Get Started
             </Link>
           </header>
